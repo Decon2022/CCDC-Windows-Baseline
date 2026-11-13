@@ -1,0 +1,271 @@
+==========================================================================
+ AD_Baseline.ps1 - WHAT THIS SCRIPT DOES
+ "BlueShield: Domain Controller Security Hardening & Audit"
+==========================================================================
+
+OVERVIEW
+--------
+AD_Baseline.ps1 is a PowerShell script that checks a Windows Domain
+Controller (DC) for common security weaknesses and fixes them. It is made
+for CCDC-style defense.
+
+The script has two halves:
+
+  PART 1 - AD / OS hardening (lines 1-631)
+           INTERACTIVE. Each check reports Secure or Warning. When a check
+           fails, the script asks "Apply fix? (Y/N)" before it changes
+           anything.
+
+  PART 2 - DNS hardening (lines 632-865)
+           NOT INTERACTIVE. It enforces every setting automatically and
+           does not ask first.
+
+Requirements:
+  - Run it as Administrator on a Domain Controller, or on a machine with
+    RSAT installed.
+  - The ActiveDirectory module is required. The script exits if the module
+    fails to load.
+  - The DnsServer module is required for Part 2. Part 2 stops if the module
+    is missing.
+
+Output:
+  Every check is printed in color as [Secure] / [Warning] / [Critical] /
+  [Error] / [Skipped], and it is also saved in an in-memory list
+  ($global:Results). A count of results per status is printed at the end.
+  Nothing is written to a file.
+
+
+==========================================================================
+ PART 1 - AD / OS HARDENING (INTERACTIVE)
+==========================================================================
+
+Each item below lists what the script checks, what counts as "secure",
+and what the fix changes if you answer Y.
+
+1. NTLM Hardening
+   Checks:  HKLM\SYSTEM\CurrentControlSet\Control\Lsa\LmCompatibilityLevel
+   Secure:  Value is 5 or higher (send NTLMv2 only; refuse LM and NTLMv1)
+   Fix:     Sets the value to 5
+   Why:     Blocks downgrade attacks and the cracking of weak LM/NTLMv1 hashes.
+
+2. LLMNR Disable
+   Checks:  HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\EnableMulticast
+   Secure:  Value is 0
+   Fix:     Sets the value to 0. NOTE: the script creates the DNSClient key
+            before it asks you anything.
+   Why:     Stops LLMNR poisoning attacks (Responder) that capture hashes.
+
+3. LSASS Protection (RunAsPPL)
+   Checks:  HKLM\SYSTEM\CurrentControlSet\Control\Lsa\RunAsPPL
+   Secure:  Value is 1
+   Fix:     Sets the value to 1. Takes effect only after a REBOOT.
+   Why:     Runs LSASS as a protected process so tools such as Mimikatz
+            cannot easily dump credentials from it.
+
+4. Kerberos Legacy Encryption (system-wide)
+   Checks:  HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System\
+            Kerberos\Parameters\SupportOldEncryptionTypes
+   Secure:  Value is 0
+   Fix:     Sets the value to 0. The script creates the key before it asks.
+   Why:     Meant to disable weak DES/RC4 Kerberos encryption.
+
+5. SMB Signing
+   Checks:  RequireSecuritySignature under both LanmanServer and
+            LanmanWorkstation\Parameters
+   Secure:  Both values are 1
+   Fix:     Sets both values to 1
+   Why:     Prevents SMB relay and man-in-the-middle attacks.
+
+6. Anonymous Access
+   Checks:  HKLM\SYSTEM\CurrentControlSet\Control\Lsa\RestrictAnonymous
+   Secure:  Value is 1
+   Fix:     Sets the value to 1
+   Why:     Limits what anonymous (unauthenticated) users can enumerate.
+
+7. Guest Account
+   Checks:  The local "Guest" account (Get-LocalUser)
+   Secure:  The account exists and is disabled
+   Fix:     Runs "net user guest /active:no"
+
+8. NULL Session Enumeration
+   Checks:  RestrictAnonymousSAM, RestrictAnonymous (Lsa) and
+            RestrictNullSessAccess (LanManServer)
+   Secure:  All three values are 1
+   Fix:     Sets all three to 1, then RESTARTS THE "Server" SERVICE.
+            SMB shares, including SYSVOL and NETLOGON, drop for a moment.
+   Why:     Blocks null-session enumeration of users, groups and shares
+            (enum4linux, rpcclient).
+
+9. NetBIOS over TCP/IP
+   Checks:  Every IP-enabled network adapter (WMI TcpipNetbiosOptions)
+   Secure:  Every adapter has the value 2 (Disabled)
+   Fix:     Disables NetBIOS on ALL adapters
+   Why:     Stops NBT-NS poisoning and NetBIOS enumeration.
+
+10. ZeroLogon / Netlogon Secure Channel
+    Checks:  HKLM\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters
+             RequireStrongKey=1, RequireSignOrSeal=1, RequireSeal=1,
+             RequireSigning=1, FullSecureChannelProtection=1,
+             DisablePasswordChange=0
+    Secure:  All six values match
+    Fix:     Writes all six values, then restarts the Netlogon service
+    Why:     Mitigates CVE-2020-1472 (ZeroLogon).
+
+11. Privileged AD Group Review
+    Groups:  Domain Admins, Enterprise Admins, Administrators, DnsAdmins,
+             Schema Admins, Group Policy Creator Owners, Key Admins,
+             Enterprise Key Admins
+    Allowed: Only the members "Administrator", "Domain Admins" and
+             "Enterprise Admins"
+    Fix:     For EVERY other member, the script asks
+             "Remove <user> from <group>? (Y/N)", one member at a time.
+    CAUTION: Your own team's admin accounts are flagged too. Read each
+             prompt before you answer, or you can lock yourself out.
+
+12. Password Never Expires
+    Checks:  Every AD user with PasswordNeverExpires = True
+    Fix:     One Y/N prompt clears the flag for ALL listed users.
+    CAUTION: This includes service accounts and krbtgt. Their passwords
+             will then expire under the domain password policy.
+
+13. AS-REP Roasting
+    Checks:  Every AD user with DoesNotRequirePreAuth = True
+    Fix:     Asks Y/N for each user, then turns Kerberos pre-authentication
+             back on.
+    Why:     Without pre-auth, attackers can request a ticket for the
+             account and crack its password offline.
+
+14. Kerberos Per-User Encryption (AES only)
+    Checks:  The msDS-SupportedEncryptionTypes attribute on each AD user.
+             A user is flagged when the attribute is empty, has a DES bit
+             set, or has no AES bit set.
+    Fix:     Sets the attribute to 24 (AES128 + AES256 only). One user is
+             asked about alone; several users are fixed with one Y/N.
+    CAUTION: In most domains almost every user has this attribute empty,
+             so expect nearly ALL users to be flagged. Apps or services
+             that only support RC4 can break.
+
+15. Print Spooler
+    Checks:  The Spooler service
+    Secure:  The service is Stopped and its startup type is Disabled
+    Fix:     Stops the service and disables it
+    Why:     Mitigates PrintNightmare and printer-bug coercion attacks.
+
+DEFINED BUT NEVER RUN
+   The two functions below exist in the script, but nothing calls them,
+   so they do nothing:
+   - Enforce-UserEnumerationBlock: would set RestrictAnonymousSAM,
+     RestrictAnonymous, RestrictNullSessAccess and
+     EveryoneIncludesAnonymous=0 without asking.
+   - Harden-DomainUsersACL: would remove List and Read rights for
+     Authenticated Users and Domain Users from the domain root ACL.
+     WARNING: this can badly break AD (logons, Group Policy, LDAP apps).
+     Do not call it without testing first.
+
+
+==========================================================================
+ PART 2 - DNS HARDENING (AUTOMATIC, NO PROMPTS)
+==========================================================================
+
+Part 2 redefines the helper functions and clears $global:Results, so the
+results from Part 1 are LOST before the final summary prints.
+
+It loads the DnsServer module and finds all AD-integrated primary zones
+(TrustAnchors is excluded). If it finds no such zone, it reports Critical
+and stops.
+
+DNS-1 Secure Dynamic Updates
+      Sets each AD zone's DynamicUpdate to "Secure" so only authenticated
+      domain machines can register DNS records.
+
+DNS-2 Zone Transfers
+      Runs "dnscmd /ZoneResetSecondaries <zone> /NoXfr" on each zone, which
+      disables zone transfers and stops attackers from dumping the whole
+      zone. AD replication does not need zone transfers.
+
+DNS-3 Recursion
+      Turns DNS recursion OFF.
+      WARNING: With recursion off, the DC stops resolving outside names
+      for clients, and its forwarders stop working too. Machines that use
+      this DC for DNS lose internet name resolution. That can break scored
+      services and updates.
+
+DNS-4 Listening Interfaces (report only)
+      Reports whether DNS listens on specific IPs or on all interfaces.
+      Changes nothing.
+
+DNS-5 Cache Locking
+      Raises cache locking to 50% if it is lower. This makes cache
+      poisoning harder.
+
+DNS-6 Diagnostic Logging
+      Turns on query, update and notification logging, with log-file
+      rollover.
+
+DNS-7 Scavenging
+      If scavenging is off, turns it on at the server and on each AD zone,
+      with 7-day refresh and no-refresh intervals. This removes stale
+      records.
+
+SUMMARY
+      Prints how many results had each status (Secure, Error, and so on).
+      Only the DNS results are counted.
+
+
+==========================================================================
+ PROBLEMS FOUND IN THE SCRIPT (FIX THESE BEFORE YOU USE IT)
+==========================================================================
+
+1. SYNTAX ERROR, line 599 - the script will not run as written:
+     Write-Host "...LDAP enumeration rights." -ForegroundColor Green"
+   The quote after "Green" is extra. Delete it.
+
+2. SYNTAX ERROR, line 862:
+     Write-Host ("{0,-10}: {1}" -f $_.Name, $_.Count)" -ForegroundColor Cyan
+   The quote after the closing ")" is extra. Delete it.
+
+   Because of these two errors, PowerShell fails to parse the file, and
+   NONE of the script runs until both are fixed.
+
+3. Part 2 clears $global:Results (line 651), so the final summary leaves
+   out every Part 1 result.
+
+4. The helper functions and Add-Result are defined twice. The second
+   version (from line 643 on) replaces the first and drops the color-coded
+   output.
+
+5. Enforce-UserEnumerationBlock and Harden-DomainUsersACL are never
+   called (see the note at the end of Part 1).
+
+6. Line 490 uses unusual syntax, $_.{"msDS-SupportedEncryptionTypes"}.
+   The line below it uses the normal form, $_."msDS-SupportedEncryptionTypes".
+   Use the normal form on both lines so the check is reliable.
+
+7. The "Kerberos Encryption" result name is used both by the system-wide
+   registry check (#4) and by the per-user check (#14), so the two are
+   hard to tell apart in the results.
+
+8. If dnscmd fails in DNS-2, it does not raise a PowerShell error, so the
+   script still reports "Secure" even when the change did not apply.
+
+9. Some fixes only take effect after a reboot or a service restart, the
+   RunAsPPL change (LSASS) for example.
+
+
+==========================================================================
+ QUICK RISK SUMMARY FOR COMPETITION USE
+==========================================================================
+ Low risk:     LLMNR, NetBIOS, Guest, Print Spooler, AS-REP fix, DNS
+               secure updates, zone transfers, cache locking, logging
+ Medium risk:  SMB signing, NTLMv2-only (older clients can lose access),
+               null-session restrictions (restart the Server service),
+               ZeroLogon (restarts Netlogon), scavenging
+ High risk:    Removing privileged group members (can lock you out),
+               PasswordNeverExpires on every account (service accounts),
+               AES-only for every user, DNS recursion off (breaks outside
+               name resolution), Harden-DomainUsersACL (not called;
+               dangerous)
+
+ Take a snapshot or backup of the DC before you run the script, and keep
+ a list of the scored services that depend on DNS and SMB.
+==========================================================================
