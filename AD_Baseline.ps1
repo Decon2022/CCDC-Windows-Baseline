@@ -872,3 +872,8 @@ $Results | Group-Object Status | ForEach-Object {
 }
 
 Write-Host "`n========== DNS HARDENING COMPLETE ==========" -ForegroundColor Green
+
+
+# To be continue with the additional checks.
+
+# needs baseline report 
