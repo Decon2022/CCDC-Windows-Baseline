@@ -10,8 +10,8 @@ systeminfo                                        > "$out\systeminfo.txt"
 ipconfig /all                                     > "$out\ipconfig.txt"
 
 # Users and groups
-Get-LocalUser | Select-Object Name,Enabled,LastLogon     | Out-File "$out\users.txt"
-Get-LocalGroupMember Administrators               | Out-File "$out\admins.txt"
+Get-LocalUser | Select-Object Name, Enabled, LastLogon     | Out-File "$out\users.txt"
+Get-LocalGroupMember Administrators                        | Out-File "$out\admins.txt"
 net localgroup                                    > "$out\groups.txt"
 
 # Services and processes
