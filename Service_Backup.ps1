@@ -15,7 +15,7 @@ Get-LocalGroupMember Administrators               | Out-File "$out\admins.txt"
 net localgroup                                    > "$out\groups.txt"
 
 # Services and processes
-Get-Service | Sort-Object Status,Name | Select-Object Name,DisplayName,Status,StartType | Out-File "$out\services.txt" -Width 250
+Get-CimInstance Win32_Service | Sort-Object State,Name | Select-Object Name,DisplayName,State,StartMode,StartName,PathName | Format-Table -AutoSize | Out-File "$out\services.txt" -Width 500
 Get-Process | Sort-Object Name | Select-Object Id,Name,Path     | Out-File "$out\processes.txt" -Width 250
 
 # Network
