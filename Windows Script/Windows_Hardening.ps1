@@ -12,37 +12,55 @@ Check Windows Hardening Checklist (cybersecurity101.net)
 
 #>
 
-# Run as Administrator
-# 1. Enable Windows Firewall acrross all profile 
-Set-NetFirewallProfile -Profile Domain, Public, Private -Enabled True
+try {
+    if (-not ([Security.Principal.WindowsPrincipal][Secuirty.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Secuirity.Principal.WindowsBuiltInRole]::Administrator){
+        Write-Host "LOL: You thought, you had access :)"-ForegroundColor Red
+        return 
 
-# 2. Disable SMBv1 (Legacy protocol mitigation) 
-Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue 
+    }
 
-# 3. Disable LLMNR ( Mitigates local name resolution poisoning )
-New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Force | Out-Null
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Name "EnableMultcast" -Value 0 -Type DWord
+    #0. Change Local Admin Password
+    Set-LocalUser -Name "Administrator" -Password (Read-Host -AsSecureString "Enter new password")
 
-# 4. Disable WDigest Cleartext Credential Caching 
-Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential" -Value 0 -Type DWord
+    # Run as Administrator
+    # 1. Enable Windows Firewall acrross all profile 
+    Set-NetFirewallProfile -Profile Domain, Public, Private -Enabled True
 
-# 5. Enable PowerShell Script Block Logging ( Event ID 4104 )
-$PSLogPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Powershell\ScriptBlockLogging"
-New-Item -Path $PSLogPath -Force | Out-Null
-Set-ItemProperty -Path $PSLogPath -Name "EnableScriptBlockLogging" -Value 1 -Type DWord
+    # 2. Disable SMBv1 (Legacy protocol mitigation) 
+    Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart -ErrorAction SilentlyContinue 
 
-# 6. Enable Command-Line Process Auditing (Event ID 4688)
-<# Logs every program executed on the system 
-PS:  This might be too resource heavy
-#>
-auditpol.exe /set /subcategory:"Process Creation" /success:enable /failure:enable | Out-Null
-$AuditPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit"
-New-Item -Path $AuditPath -Force | Out-Null
-Set-ItemProperty -Path $AuditPath -Name "ProcessCreationIncludeCmdLine_Enabled" -Value 1 -Type DWord
+    # 3. Disable LLMNR ( Mitigates local name resolution poisoning )
+    New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Force | Out-Null
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient" -Name "EnableMultcast" -Value 0 -Type DWord
 
-# 7. Disable Build-in Guest Account 
-Disable-LocalUser -Name "Guest" -ErrorAction SilentlyContinue
+    # 4. Disable WDigest Cleartext Credential Caching 
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential" -Value 0 -Type DWord
 
-Write-Host "[+] Core hardening baseline appiled. " -ForegroundColor Green
+    # 5. Enable PowerShell Script Block Logging ( Event ID 4104 )
+    $PSLogPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Powershell\ScriptBlockLogging"
+    New-Item -Path $PSLogPath -Force | Out-Null
+    Set-ItemProperty -Path $PSLogPath -Name "EnableScriptBlockLogging" -Value 1 -Type DWord
+
+    # 6. Enable Command-Line Process Auditing (Event ID 4688)
+    <# Logs every program executed on the system 
+    PS:  This might be too resource heavy
+    #>
+    auditpol.exe /set /subcategory:"Process Creation" /success:enable /failure:enable | Out-Null
+    $AuditPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit"
+    New-Item -Path $AuditPath -Force | Out-Null
+    Set-ItemProperty -Path $AuditPath -Name "ProcessCreationIncludeCmdLine_Enabled" -Value 1 -Type DWord
+
+    # 7. Disable Build-in Guest Account 
+    Disable-LocalUser -Name "Guest" -ErrorAction SilentlyContinue
+
+    Write-Host "[+] Core hardening baseline appiled. " -ForegroundColor Green
+
+
+
+}
+catch {
+    Write-Error "Opps Try Again :)"
+    Exit 1
+}
 
 
